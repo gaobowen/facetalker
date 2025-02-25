@@ -1,0 +1,9 @@
+#pip install git+https://github.com/huggingface/diffusers
+huggingface_hub==0.25.0
+accelerate==0.28.0
+transformers==4.39.2  
+librosa
+soundfile
+lpips
+tensorboard
+ffmpeg-python
