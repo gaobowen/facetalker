@@ -26,6 +26,8 @@ options = vision.FaceLandmarkerOptions(base_options=base_options,
                                     num_faces=1)
 detector = vision.FaceLandmarker.create_from_options(options)
 
+img_resize = 384
+
 def read_video(video_path, save_dir):
     audio_path = os.path.join(save_dir, 'output.wav')
     # wav to hubert
@@ -102,7 +104,7 @@ def read_video(video_path, save_dir):
                 
                 crop = image[y:y+h+1, x:x+w+1, :]
 
-                crop = cv2.resize(crop, (384, 384), interpolation=cv2.INTER_LANCZOS4)
+                crop = cv2.resize(crop, (img_resize, img_resize), interpolation=cv2.INTER_LANCZOS4)
                 
                 cv2.imwrite(os.path.join(save_dir, f'{index}.jpg'), crop)
                 
@@ -123,8 +125,8 @@ def read_video(video_path, save_dir):
                 # mask = mask.reshape((1, 1, 32, 32))
                 # np.save(os.path.join(save_dir, f'{index}_mask.npy'), mask)
                 
-                mask = cv2.resize(mask, (384, 384), interpolation=cv2.INTER_LANCZOS4)
-                mask = mask.reshape((384, 384, 1))
+                mask = cv2.resize(mask, (img_resize, img_resize), interpolation=cv2.INTER_LANCZOS4)
+                mask = mask.reshape((img_resize, img_resize, 1))
                 crop = crop * mask
                 cv2.imwrite(os.path.join(save_dir, f'{index}_mask.jpg'), crop)
                 
@@ -143,8 +145,8 @@ def read_video(video_path, save_dir):
     os.system(f"ffmpeg -loglevel error -i {video_path} -ac 1 -ar 16000 -vn {audio_path}")
     
 
-prefix = "/data/split_video_25fps"
-outdir = "/data/split_video_25fps_imgs-2"
+prefix = "/data/gaobowen/split_video_25fps"
+outdir = "/data/gaobowen/split_video_25fps_imgs-2"
 
 id_mp4s = glob.glob(f"{prefix}/*.mp4", recursive=True)
 # id_mp4s = [f'{prefix}/BarackObama_1.mp4']
