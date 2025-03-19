@@ -2,6 +2,9 @@ models
 *.jpg
 test
 checkout
+runs
+*.out
+output
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

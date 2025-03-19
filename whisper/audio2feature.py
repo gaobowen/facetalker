@@ -114,12 +114,15 @@ class Audio2Feature():
 if __name__ == "__main__":
     from tqdm import tqdm
     audio_processor = Audio2Feature(model_path="../models/whisper/tiny.pt")
-    audio_paths = glob.glob(f"/data/split_video_25fps_imgs-2/*/output.wav", recursive=True)
+    audio_paths = glob.glob(f"/data/gaobowen/split_video_25fps_imgs-2/*/output.wav", recursive=True)
+    # audio_paths = ["/data/gaobowen/facetalker/test/output.wav"]
     for audio_path in tqdm(audio_paths):
+        whisper_path = audio_path.replace('.wav', '_whisper.npy')
+        if os.path.exists(whisper_path): continue
         array = audio_processor.audio2feat(audio_path).reshape(-1, 5, 384)
         if array.shape[0] % 2 > 0:
             array = array[:array.shape[0]-1]
-        np.save(audio_path.replace('.wav', '_whisper.npy'), array.reshape(-1, 10, 384))
+        np.save(whisper_path, array.reshape(-1, 10, 384))
         
     
 

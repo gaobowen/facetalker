@@ -1,0 +1,13 @@
+{
+  "sample_size": 10,
+  "in_channels": 192,
+  "out_channels": 160,
+  "num_layers": 16,
+  "mlp_ratio": 4,
+  "num_attention_heads": 64,
+  "attention_head_dim": 32,
+  "num_cross_attention_heads": 16,
+  "cross_attention_head_dim":128,
+  "cross_attention_dim": 2048,
+  "caption_channels": 2048
+}
