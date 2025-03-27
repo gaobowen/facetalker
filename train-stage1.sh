@@ -3,7 +3,7 @@
 accelerate launch train.py \
 --mixed_precision="no" \
 --data_root="/data/gaobowen/split_video_25fps_imgs-2" \
---train_batch_size=512 \
+--train_batch_size=480 \
 --gradient_accumulation_steps=1 \
 --gradient_checkpointing \
 --max_train_steps=100000 \

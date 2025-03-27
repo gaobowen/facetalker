@@ -7,7 +7,7 @@ accelerate launch train.py \
 --gradient_accumulation_steps=64 \
 --gradient_checkpointing \
 --max_train_steps=1000000 \
---learning_rate=6e-06 \
+--learning_rate=2e-05 \
 --max_grad_norm=1 \
 --lr_warmup_steps=0 \
 --output_dir="output" \

@@ -163,7 +163,7 @@ def inference(step_num):
 
 
 if __name__ == '__main__':
-    inference(42000)
+    inference(58000)
     def head_mp4():
         os.system("cp -rf ./test/2.jpg ./test/0.jpg")
         os.system("cp -rf ./test/2.jpg ./test/1.jpg")

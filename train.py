@@ -288,26 +288,28 @@ def train():
                     assert torch.isinf(vaes_pred).sum() == 0
                 check_error2()
                 loss = 0
-                if args.finetune_rgb:
-                    loss += F.l1_loss(vaes_pred.float(), real_vaes_tensor.float(), reduction="mean")
-                else:
-                    loss += F.mse_loss(vaes_pred.float(), real_vaes_tensor.float(), reduction="mean")
+                # if args.finetune_rgb:
+                #     vae_loss = F.l1_loss(vaes_pred.float(), real_vaes_tensor.float(), reduction="mean")
+                # else:
+                # vae_loss = F.mse_loss(vaes_pred.float(), real_vaes_tensor.float(), reduction="mean")
+                vae_loss = F.l1_loss(vaes_pred.float(), real_vaes_tensor.float(), reduction="mean")
                 
+                loss += vae_loss
                 # raise OSError("AA")
                 
                 if args.finetune_rgb:
                     vaes_pred = vaes_pred.half().reshape(-1, 32, 10, 10)
                     img_pred = dc_ae.decode(vaes_pred, return_dict=False)[0]
                     real_imgs_tensor = real_imgs_tensor.half().reshape(-1, 3, 320, 320)
-                    # 加强下半张脸
-                    if step % 2 == 0:
+                    # 加强下半脸
+                    if random.random() < 0.6:
                         img_pred = img_pred[:,:,100:]
                         real_imgs_tensor = real_imgs_tensor[:,:,100:]
                     
                     
                     # rgb L1 + lpips
-                    loss_img = F.l1_loss(img_pred, real_imgs_tensor, reduction="mean")
-                    loss +=  0.1 * loss_img
+                    # loss_img = F.l1_loss(img_pred, real_imgs_tensor, reduction="mean")
+                    # loss +=  0.5 * loss_img
                     
                     if args.finetune_lpips:
                         # # image should be RGB, IMPORTANT: normalized to [-1,1]
