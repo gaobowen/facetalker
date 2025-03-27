@@ -1,4 +1,5 @@
-#pip install git+https://github.com/huggingface/diffusers
+# pip install git+https://github.com/huggingface/diffusers
+# cd diffusers && pip install -e .
 huggingface_hub==0.25.0
 accelerate==0.28.0
 transformers==4.39.2  
@@ -9,3 +10,7 @@ tensorboard
 ffmpeg-python
 face-alignment
 einops
+mediapipe
+opencv-python==4.9.0.80
+numpy==1.24.4
+
