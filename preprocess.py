@@ -154,7 +154,7 @@ id_mp4s = glob.glob(f"{prefix}/*.mp4", recursive=True)
 print(len(id_mp4s))
 
 if __name__ == "__main__":
-    # 卡尔曼滤波（中值滤波） 稳定人脸数据集
+    # 卡尔曼滤波 稳定人脸数据集
     # https://blog.51cto.com/u_16213379/12991281
     def run_all_data():
         for filepath in tqdm(id_mp4s):

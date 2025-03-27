@@ -324,26 +324,50 @@ face_surround_landmarks = [
 if __name__ == "__main__":
     from torchvision.utils import save_image
     
-    image_processor = ImageProcessor(384, mask="fix_mask", device="cuda", )
-    video = cv2.VideoCapture("/data/laihuadata/1742353006021-112652.mp4")
-    index = 0
-    while True:
-        ret, frame = video.read()
-        if not ret:
-            break
+    resolution = 384
+    
+    image_processor = ImageProcessor(resolution, mask="fix_mask", device="cuda", )
+    '''
+    /data/split_video_25fps/BarackObama_1.mp4
+    /data/laihuadata/1742353006021-112652.mp4
+    '''
+    def get_face_img(video_path, save_dir):
+        video = cv2.VideoCapture(video_path)
+        mask_image = cv2.imread("./mask.png")
+        mask_image = cv2.cvtColor(mask_image, cv2.COLOR_BGR2RGB)
+        mask_image = cv2.resize(mask_image, (resolution, resolution), interpolation=cv2.INTER_LANCZOS4) / 255.0
+        index = 0
+        while True:
+            ret, frame = video.read()
+            if not ret:
+                break
 
-        # cv2.imwrite("image.jpg", frame)
-        
-        # image_processor.fa.get_landmarks(image)
+            # cv2.imwrite("image.jpg", frame)
+            
+            # image_processor.fa.get_landmarks(image)
 
-        # frame = rearrange(torch.Tensor(frame).type(torch.uint8), "h w c ->  c h w")
-        # face, masked_face, _ = image_processor.preprocess_fixed_mask_image(frame, affine_transform=True)
-        # 输入 numpy格式h w c，输出 torch格式c h w
-        face, _, _ = image_processor.affine_transform(frame)
-        cv2.imwrite(f"../test/{index}.jpg", face)
-        # save_image(face, f"../test/{index}.jpg")
-        index += 1
-        print(f"\r{index}")
+            # frame = rearrange(torch.Tensor(frame).type(torch.uint8), "h w c ->  c h w")
+            # face, masked_face, _ = image_processor.preprocess_fixed_mask_image(frame, affine_transform=True)
+            # 输入 numpy格式h w c，输出 torch格式c h w
+            face, box, affine_matrix = image_processor.affine_transform(frame)
+            # print(type(face), type(box), type(affine_matrix))
+            cv2.imwrite(os.path.join(save_dir, f"{index}.jpg"), face)
+            npbox = np.array(box)
+            np.save(os.path.join(save_dir, f'{index}_box.npy'), npbox)
+            np.save(os.path.join(save_dir, f'{index}_matrix.npy'), affine_matrix)
+            face = face * mask_image
+            cv2.imwrite(os.path.join(save_dir, f"{index}_mask.jpg"), face)
+            
+            def restore():
+                x1, y1, x2, y2 = box
+                height = int(y2 - y1)
+                width = int(x2 - x1)
+                face = cv2.resize(face, (width, height), interpolation=cv2.INTER_LANCZOS4)
+                out_frame = image_processor.restorer.restore_img(frame, face, affine_matrix)
+                cv2.imwrite(f"../test/out{index}.jpg", out_frame)
+
+            index += 1
+        # print(f"\r{index}", end="")
         # break
 
     # face = (rearrange(face, "c h w -> h w c").detach().cpu().numpy()).astype(np.uint8)
@@ -351,3 +375,5 @@ if __name__ == "__main__":
 
     # masked_face = (rearrange(masked_face, "c h w -> h w c").detach().cpu().numpy()).astype(np.uint8)
     # cv2.imwrite("masked_face.jpg", masked_face)
+    
+    # ffmpeg -framerate 25 -i ../test/out%d.jpg -c:v libx264 -y ../outputjpg.mp4
