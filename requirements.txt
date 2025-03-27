@@ -7,3 +7,5 @@ soundfile
 lpips
 tensorboard
 ffmpeg-python
+face-alignment
+einops
