@@ -7,7 +7,7 @@ from pathlib import Path
 
 from diffusers import AutoencoderDC, SanaTransformer2DModel
 
-from dataloader import MyDataset
+from dataloader_hubert import MyDataset
 
 import torch
 import torch.nn as nn
@@ -122,7 +122,16 @@ parser.add_argument("--finetune_rgb", action="store_true", default=False)
 
 parser.add_argument("--finetune_lpips", action="store_true", default=False)
 
+parser.add_argument("--mouth_prob",type=float,default=0.0)
+
+parser.add_argument("--frames_mode",type=str, default="Rxxxxxxxxxx")
+
+parser.add_argument("--audio_window_add", type=int, default=0)
+
+
 args = parser.parse_args()
+
+
 
 def train():
     logging_dir = Path(args.output_dir, args.logging_dir)
@@ -136,27 +145,42 @@ def train():
         project_config=project_config,
     )
     
-    # latent 3x320x320 -> 32x10x10
-    num_frames = 5
+    # latent 384x384 -> 32x12x12
+    num_frames = len(args.frames_mode) - 1 
     config = {
-        "sample_size": 10,
+        "sample_size": 12,
         "in_channels": 32 * (num_frames + 1),
         "out_channels": 32 * num_frames,
         "num_layers": 12,
-        "num_attention_heads": 60,
+        "mlp_ratio": 4,
+        "num_attention_heads": 32,
         "attention_head_dim": 32,
-        "num_cross_attention_heads": 10,
-        "cross_attention_head_dim":192,
-        "cross_attention_dim": 1920,
-        "caption_channels": 384,
+        "num_cross_attention_heads": 8,
+        "cross_attention_head_dim":128,
+        "cross_attention_dim": 1024,
+        "caption_channels": 1024,
     }
     
     model = SanaTransformer2DModel(**config).to(accelerator.device)
-    
+
+    def initialize_weights(model):
+        # Initialize transformer layers:
+        def _basic_init(module):
+            if isinstance(module, nn.Linear):
+                torch.nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+
+        model.apply(_basic_init)
+
+    initialize_weights(model)
+    # 减少显存占用，允许更大的 batch size
+    model.enable_gradient_checkpointing()
+
     # model = init_transformer2d(model)
     
     if accelerator.is_main_process:
-        writer = SummaryWriter('runs/experiment_1')
+        writer = SummaryWriter(os.path.join(args.output_dir, 'runs/experiment_1'))
     
     params_to_optimize = (
         itertools.chain(model.parameters()))
@@ -179,13 +203,13 @@ def train():
     if args.pretrained_model_name_or_path is not None:
         model.load_state_dict(torch.load(args.pretrained_model_name_or_path))
     
-    # 减少显存占用，允许更大的 batch size
-    model.enable_gradient_checkpointing()
-    
-    dataset = MyDataset(root_dir=args.data_root, mode='Rxxxxx', only_vae = False)
+    if args.finetune_rgb:
+        dataset = MyDataset(root_dir=args.data_root, mode='Rxxxxxxxxxx', only_vae = False)
+    else:
+        dataset = MyDataset(root_dir=args.data_root, mode='Rxxxxxxxxxx', only_vae = True)
     # print(f'img count: {len(dataset)}')
     # , num_workers=8
-    dataloader = DataLoader(dataset, batch_size=args.train_batch_size, shuffle=True, num_workers=8)
+    dataloader = DataLoader(dataset, batch_size=args.train_batch_size, shuffle=True, num_workers=4)
     
     num_update_steps_per_epoch = math.ceil(len(dataloader) / args.gradient_accumulation_steps)
     
@@ -258,15 +282,23 @@ def train():
     progress_bar = tqdm(range(global_step, args.max_train_steps), disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
     
+    mask_transform = transforms.Compose([
+            transforms.Resize((384, 384)),  # 调整图片大小
+            transforms.ToTensor(),
+            transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])  # 标准化[-1,1] Normalize = (tensor - mean) / std   
+        ])
+    # 原图嘴部为0
+    mask_img = 1 - mask_transform(Image.open("./utils/mask.png")).to(accelerator.device).reshape(1, 3, 384, 384)
+    
     # 200,000 steps * 265 img + Lips finetune 100,000 steps * 265Batch
     #  50,000,000
     model.train()
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, (input_vaes_tensor, audio_feats, real_vaes_tensor, real_imgs_tensor) in enumerate(dataloader):
-            random_dataloader = False
+            random_dataloader = True
             if not random_dataloader and args.resume_from_checkpoint and epoch == first_epoch and step < resume_step:
                 if step % args.gradient_accumulation_steps == 0:
-                    progress_bar.update(1)
+                    # progress_bar.update(1)
                     accelerator.print(f"Training skip {step}")
                     continue
             # 自动平均每步梯度
@@ -292,19 +324,22 @@ def train():
                 #     vae_loss = F.l1_loss(vaes_pred.float(), real_vaes_tensor.float(), reduction="mean")
                 # else:
                 # vae_loss = F.mse_loss(vaes_pred.float(), real_vaes_tensor.float(), reduction="mean")
-                vae_loss = F.mse_loss(vaes_pred.float(), real_vaes_tensor.float(), reduction="mean")
+                # vae_loss = F.mse_loss(vaes_pred.float(), real_vaes_tensor.float(), reduction="mean")
                 
-                loss += vae_loss
+                # loss += vae_loss
                 # raise OSError("AA")
                 
                 if args.finetune_rgb:
-                    vaes_pred = vaes_pred.half().reshape(-1, 32, 10, 10)
+                    vaes_pred = vaes_pred.half().reshape(-1, 32, 12, 12)
                     img_pred = dc_ae.decode(vaes_pred, return_dict=False)[0]
-                    real_imgs_tensor = real_imgs_tensor.half().reshape(-1, 3, 320, 320)
+                    real_imgs_tensor = real_imgs_tensor.half().reshape(-1, 3, 384, 384)
                     # 加强下半脸
-                    if random.random() < 0:
-                        img_pred = img_pred[:,:,160:]
-                        real_imgs_tensor = real_imgs_tensor[:,:,160:]
+                    if random.random() < args.mouth_prob:
+                        img_pred = img_pred * mask_img
+                        real_imgs_tensor = real_imgs_tensor * mask_img
+                        # img_pred = img_pred[:,:,120:344]
+                        # real_imgs_tensor = real_imgs_tensor[:,:,120:344]
+                    
                     
                     # rgb L1 + lpips
                     loss_img = F.l1_loss(img_pred, real_imgs_tensor, reduction="mean")
@@ -377,5 +412,6 @@ if __name__ == '__main__':
     # conda activate facetalker
     # accelerate launch train.py
     # screen nohup ./train-stage2.sh & 关闭终端会造成进程退出，这里用 screen
+    # nohup ./train-hubert-stage1.sh > train-hubert.out 2>&1 &
     # CUDA_VISIBLE_DEVICES="0" bash ./train-stage2.sh
     

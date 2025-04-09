@@ -1,5 +1,5 @@
 {
-  "sample_size": 10,
+  "sample_size": 12,
   "in_channels": 192,
   "out_channels": 160,
   "num_layers": 12,

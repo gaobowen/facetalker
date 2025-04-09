@@ -1,8 +1,8 @@
-# export CUDA_VISIBLE_DEVICES="0"
+export CUDA_VISIBLE_DEVICES="1,2,3"
 
 accelerate launch train.py \
 --mixed_precision="no" \
---data_root="/data/gaobowen/split_video_25fps_imgs-2" \
+--data_root="/data/gaobowen/split_video_25fps_stable_320" \
 --train_batch_size=480 \
 --gradient_accumulation_steps=1 \
 --gradient_checkpointing \
@@ -15,3 +15,6 @@ accelerate launch train.py \
 --resume_from_checkpoint="latest" \
 --lr_scheduler="constant" \
 
+# nohup ./train-stage1.sh &
+# tensorboard --logdir=runs --port 9600
+# conda activate facetalker

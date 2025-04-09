@@ -113,9 +113,10 @@ class Audio2Feature():
 
 if __name__ == "__main__":
     from tqdm import tqdm
+    # https://huggingface.co/ByteDance/LatentSync-1.5/resolve/main/whisper/tiny.pt
     audio_processor = Audio2Feature(model_path="../models/whisper/tiny.pt")
-    audio_paths = glob.glob(f"/data/gaobowen/split_video_25fps_imgs-2/*/output.wav", recursive=True)
-    # audio_paths = ["/data/gaobowen/facetalker/test/output.wav"]
+    audio_paths = glob.glob(f"/data/gaobowen/split_video_25fps_sdvae320/*/output.wav", recursive=True)
+    # audio_paths = ["/data/gaobowen/vaildata_imgs/1734338622200-190107/output.wav"]
     for audio_path in tqdm(audio_paths):
         whisper_path = audio_path.replace('.wav', '_whisper.npy')
         if os.path.exists(whisper_path): continue

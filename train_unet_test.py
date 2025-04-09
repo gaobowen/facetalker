@@ -5,9 +5,9 @@ import math
 import random
 from pathlib import Path
 
-from diffusers import AutoencoderDC, SanaTransformer2DModel
+from diffusers import AutoencoderDC, SanaTransformer2DModel, UNet2DConditionModel
 
-from dataloader import MyDataset
+from dataloader_unet import MyDataset
 
 import torch
 import torch.nn as nn
@@ -30,8 +30,12 @@ from accelerate import init_empty_weights
 import logging
 from accelerate.utils import ProjectConfiguration, set_seed
 from tqdm import tqdm
-
 import lpips
+import gc
+
+from sd_vae import VAE
+from omegaconf import OmegaConf
+from loss.basic_loss import initialize_vgg
 
 import glob
 import datetime
@@ -40,6 +44,23 @@ from PIL import Image
 
 logging.basicConfig(level=logging.INFO)
 logger = get_logger(__name__)
+
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model=384, max_len=5000):
+        super(PositionalEncoding, self).__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        b, seq_len, d_model = x.size()
+        pe = self.pe[:, :seq_len, :]
+        x = x + pe.to(x.device)
+        return x
 
 
 from argparse import ArgumentParser
@@ -54,7 +75,7 @@ parser.add_argument("--lr_scheduler", type=str, default="constant", help=(
         ))
 parser.add_argument("--lr_warmup_steps", type=int, default=0)
 
-parser.add_argument("--adam_beta1", type=float, default=0.9, help="The beta1 parameter for the Adam optimizer.")
+parser.add_argument("--adam_beta1", type=float, default=0.5, help="The beta1 parameter for the Adam optimizer.")
 parser.add_argument("--adam_beta2", type=float, default=0.999, help="The beta2 parameter for the Adam optimizer.")
 parser.add_argument("--adam_weight_decay", type=float, default=1e-2, help="Weight decay to use.")
 parser.add_argument("--adam_epsilon", type=float, default=1e-08, help="Epsilon value for the Adam optimizer")
@@ -122,7 +143,17 @@ parser.add_argument("--finetune_rgb", action="store_true", default=False)
 
 parser.add_argument("--finetune_lpips", action="store_true", default=False)
 
+parser.add_argument("--finetune_vgg", action="store_true", default=False)
+
+parser.add_argument("--mouth_prob",type=float,default=0.0)
+
+parser.add_argument("--frames_mode",type=str,default="xR")
+
+parser.add_argument("--audio_window_add", type=int, default=2)
+
+
 args = parser.parse_args()
+
 
 def train():
     logging_dir = Path(args.output_dir, args.logging_dir)
@@ -135,28 +166,32 @@ def train():
         log_with="tensorboard",
         project_config=project_config,
     )
+
+    def seed_everything(seed):
+        import random
+        import numpy as np
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        np.random.seed(seed % (2**32))
+        random.seed(seed)
     
-    # latent 3x320x320 -> 32x10x10
-    num_frames = 5
-    config = {
-        "sample_size": 10,
-        "in_channels": 32 * (num_frames + 1),
-        "out_channels": 32 * num_frames,
-        "num_layers": 12,
-        "num_attention_heads": 60,
-        "attention_head_dim": 32,
-        "num_cross_attention_heads": 10,
-        "cross_attention_head_dim":192,
-        "cross_attention_dim": 1920,
-        "caption_channels": 384,
-    }
-    
-    model = SanaTransformer2DModel(**config).to(accelerator.device)
-    
+    seed_everything(41 + accelerator.process_index)
+
+    with open('/data/gaobowen/facetalker/models/musetalk/musetalk.json', 'r') as f:
+        unet_config = json.load(f)
+
+    model = UNet2DConditionModel(**unet_config).to(accelerator.device)
+
+    if args.pretrained_model_name_or_path is not None:
+        model.load_state_dict(torch.load(args.pretrained_model_name_or_path))
+
+    # 减少显存占用，允许更大的 batch size
+    model.enable_gradient_checkpointing()
+
     # model = init_transformer2d(model)
     
     if accelerator.is_main_process:
-        writer = SummaryWriter('runs/experiment_1')
+        writer = SummaryWriter(os.path.join(args.output_dir, 'runs/experiment_1'))
     
     params_to_optimize = (
         itertools.chain(model.parameters()))
@@ -176,16 +211,13 @@ def train():
         num_training_steps=args.max_train_steps * accelerator.num_processes,
     )
     
-    if args.pretrained_model_name_or_path is not None:
-        model.load_state_dict(torch.load(args.pretrained_model_name_or_path))
-    
-    # 减少显存占用，允许更大的 batch size
-    model.enable_gradient_checkpointing()
-    
-    dataset = MyDataset(root_dir=args.data_root, mode='Rxxxxx', only_vae = False)
+    if args.finetune_rgb:
+        dataset = MyDataset(root_dir=args.data_root, mode='xR', only_vae = False)
+    else:
+        dataset = MyDataset(root_dir=args.data_root, mode='xR', only_vae = True)
     # print(f'img count: {len(dataset)}')
     # , num_workers=8
-    dataloader = DataLoader(dataset, batch_size=args.train_batch_size, shuffle=True, num_workers=8)
+    dataloader = DataLoader(dataset, batch_size=args.train_batch_size, shuffle=True, num_workers=4)
     
     num_update_steps_per_epoch = math.ceil(len(dataloader) / args.gradient_accumulation_steps)
     
@@ -203,15 +235,6 @@ def train():
         model, optimizer, dataloader, lr_scheduler = accelerator.prepare(
             model, optimizer, dataloader, lr_scheduler
         )
-    
-    if args.finetune_rgb:
-        dc_ae = AutoencoderDC.from_pretrained("./models/vaedc/").half().to(accelerator.device).eval()
-        dc_ae.requires_grad_(False)
-        
-    if args.finetune_lpips:
-        lpips_func = lpips.LPIPS(net='vgg').to(accelerator.device).eval()
-        lpips_func.requires_grad_(False)
-    
     
     print(f"  Num batches each epoch = {len(dataloader)}")
     logger.info("***** Running training *****")
@@ -258,20 +281,45 @@ def train():
     progress_bar = tqdm(range(global_step, args.max_train_steps), disable=not accelerator.is_local_main_process)
     progress_bar.set_description("Steps")
     
-    # 200,000 steps * 265 img + Lips finetune 100,000 steps * 265Batch
-    #  50,000,000
+    mask_transform = transforms.Compose([
+            transforms.Resize((320, 320)),  # 调整图片大小
+            transforms.ToTensor(),
+            transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5])  # 标准化[-1,1] Normalize = (tensor - mean) / std   
+        ])
+    # 原图嘴部为0
+    mask_img = 1 - mask_transform(Image.open("./utils/mask.png")).to(accelerator.device).reshape(1, 3, 320, 320)
+
+    pe = PositionalEncoding(d_model=384)
+    
+    cfg = OmegaConf.load("config/stage1.yaml")
+
+    other_device = torch.device(f"cuda:{accelerator.process_index + torch.cuda.device_count() // 2}")
+    print(f"current_device={accelerator.device}, other_device={other_device}")
+    if args.finetune_rgb:
+        vae = VAE(model_path="./models/sd-vae-ft-mse/", resized_img=320, use_float16=False, device=other_device)
+
+    if args.finetune_lpips:
+        lpips_func = lpips.LPIPS(net='vgg').to(other_device).eval()
+        lpips_func.requires_grad_(False)
+    
+    if args.finetune_vgg:
+        vgg_IN, pyramid, downsampler = initialize_vgg(cfg, other_device)
+    
+        
     model.train()
+    model.requires_grad_(True)
     for epoch in range(first_epoch, args.num_train_epochs):
-        for step, (input_vaes_tensor, audio_feats, real_vaes_tensor, real_imgs_tensor) in enumerate(dataloader):
-            random_dataloader = False
+        for step, (input_vaes_tensor, audio_feats, real_imgs_tensor) in enumerate(dataloader):
+            random_dataloader = True
             if not random_dataloader and args.resume_from_checkpoint and epoch == first_epoch and step < resume_step:
                 if step % args.gradient_accumulation_steps == 0:
-                    progress_bar.update(1)
+                    # progress_bar.update(1)
                     accelerator.print(f"Training skip {step}")
                     continue
             # 自动平均每步梯度
             with accelerator.accumulate(model):
-                timesteps = torch.ones(args.train_batch_size).to(accelerator.device) * 0.31831
+                timesteps = torch.tensor([0], device=accelerator.device)
+                audio_feats = pe(audio_feats)
                 
                 def check_error():
                     assert torch.isnan(input_vaes_tensor).sum() == 0
@@ -282,40 +330,59 @@ def train():
                     assert torch.isinf(real_vaes_tensor).sum() == 0
                 # print(input_vaes_tensor.shape)
                 # B 32*5 10 10
-                vaes_pred = model(hidden_states=input_vaes_tensor.float(), timestep=timesteps.float(), encoder_hidden_states=audio_feats.float()).sample
+                vaes_pred = model(input_vaes_tensor.float(), timestep=timesteps.float(), encoder_hidden_states=audio_feats.float()).sample
                 def check_error2():
                     assert torch.isnan(vaes_pred).sum() == 0
                     assert torch.isinf(vaes_pred).sum() == 0
-                check_error2()
+                # check_error2()
                 loss = 0
                 # if args.finetune_rgb:
                 #     vae_loss = F.l1_loss(vaes_pred.float(), real_vaes_tensor.float(), reduction="mean")
                 # else:
                 # vae_loss = F.mse_loss(vaes_pred.float(), real_vaes_tensor.float(), reduction="mean")
-                vae_loss = F.mse_loss(vaes_pred.float(), real_vaes_tensor.float(), reduction="mean")
+                # vae_loss = F.mse_loss(vaes_pred.float(), real_vaes_tensor.float(), reduction="mean")
                 
-                loss += vae_loss
+                # loss += vae_loss
                 # raise OSError("AA")
                 
                 if args.finetune_rgb:
-                    vaes_pred = vaes_pred.half().reshape(-1, 32, 10, 10)
-                    img_pred = dc_ae.decode(vaes_pred, return_dict=False)[0]
-                    real_imgs_tensor = real_imgs_tensor.half().reshape(-1, 3, 320, 320)
+                    vaes_pred = vaes_pred.reshape(-1, 4, 40, 40).to(other_device)
+                    img_pred = vae.decode_latents_tensor(vaes_pred)
+                    real_imgs_tensor = real_imgs_tensor.reshape(-1, 3, 320, 320).to(other_device)
                     # 加强下半脸
-                    if random.random() < 0:
-                        img_pred = img_pred[:,:,160:]
-                        real_imgs_tensor = real_imgs_tensor[:,:,160:]
-                    
-                    # rgb L1 + lpips
+                    # if random.random() < args.mouth_prob:
+                    #     img_pred = img_pred * mask_img
+                    #     real_imgs_tensor = real_imgs_tensor * mask_img
+                    #     # img_pred = img_pred[:,:,120:344]
+                    #     # real_imgs_tensor = real_imgs_tensor[:,:,120:344]
                     loss_img = F.l1_loss(img_pred, real_imgs_tensor, reduction="mean")
                     loss += loss_img
+
+                    if args.finetune_vgg:
+                        pyramide_real = pyramid(downsampler(real_imgs_tensor))
+                        pyramide_generated = pyramid(downsampler(img_pred))
+                        loss_IN = 0
+                        for scale in cfg.loss_params.pyramid_scale:
+                            x_vgg = vgg_IN(pyramide_generated['prediction_' + str(scale)])
+                            y_vgg = vgg_IN(pyramide_real['prediction_' + str(scale)])
+                            for i, weight in enumerate(cfg.loss_params.vgg_layer_weight):
+                                value = torch.abs(x_vgg[i] - y_vgg[i].detach()).mean() 
+                                loss_IN += weight * value
+                        loss_IN /= sum(cfg.loss_params.vgg_layer_weight)
+                        loss += loss_IN
+
                     
                     if args.finetune_lpips:
                         # # image should be RGB, IMPORTANT: normalized to [-1,1]
                         lpips_loss = lpips_func(img_pred, real_imgs_tensor).mean()
                         loss +=  0.1 * lpips_loss
-                    
+                loss.to(accelerator.device)
                 accelerator.backward(loss)
+                del img_pred
+                del real_imgs_tensor
+                del pyramide_real
+                del pyramide_generated
+                gc.collect()
                 torch.cuda.empty_cache()
                 if accelerator.sync_gradients:
                     params_to_clip = (
@@ -377,5 +444,6 @@ if __name__ == '__main__':
     # conda activate facetalker
     # accelerate launch train.py
     # screen nohup ./train-stage2.sh & 关闭终端会造成进程退出，这里用 screen
+    # nohup ./train-hubert-stage1.sh > train-hubert.out 2>&1 &
     # CUDA_VISIBLE_DEVICES="0" bash ./train-stage2.sh
     

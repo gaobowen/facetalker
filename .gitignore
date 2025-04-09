@@ -4,7 +4,9 @@ test
 checkout
 runs
 *.out
-output
+output*
+output_hubert
+test_hubert
 *.mp4
 
 # Byte-compiled / optimized / DLL files

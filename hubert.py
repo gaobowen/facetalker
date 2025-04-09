@@ -86,36 +86,36 @@ args = parser.parse_args()
 
 wav_name = args.wav
 
+if __name__ == "__main__":
+    # wav_name = "/data/split_video_25fps_imgs/TomUdall_1/output.wav"
+    prefix = "/data/gaobowen/split_video_25fps_stable"
+    id_wavs = glob.glob(f"{prefix}/*/*.wav", recursive=True)
+    # id_wavs = ["/data/gaobowen/facetalker/test_hubert/output.wav"]
+    print(len(id_wavs))
 
-# wav_name = "/data/split_video_25fps_imgs/TomUdall_1/output.wav"
-prefix = "/data/gaobowen/split_video_25fps_imgs"
-id_wavs = glob.glob(f"{prefix}/*/*.wav", recursive=True)
-id_wavs = ["/data/gaobowen/split_video_25fps_imgs/1733208337445-160927/output.wav"]
-print(len(id_wavs))
+    # for wav_path in tqdm(id_wavs):
+    #     print(wav_path)
+    #     count = len(glob.glob(wav_path.replace("output.wav", "*.jpg"), recursive=True))
+    #     jsonpath = wav_path.replace("output.wav", "config.json")
+    #     with open(jsonpath, 'w') as f:
+    #         # 使用json.dump()函数将字典写入到文件
+    #         json.dump({"count": count, }, f)
+        # raise OSError()
 
-for wav_path in tqdm(id_wavs):
-    print(wav_path)
-    count = len(glob.glob(wav_path.replace("output.wav", "*.jpg"), recursive=True))
-    jsonpath = wav_path.replace("output.wav", "config.json")
-    with open(jsonpath, 'w') as f:
-        # 使用json.dump()函数将字典写入到文件
-        json.dump({"count": count, }, f)
     # raise OSError()
 
-# raise OSError()
+    for wav_path in tqdm(id_wavs):
+        wav_name = wav_path
 
-for wav_path in tqdm(id_wavs):
-    wav_name = wav_path
+        speech, sr = sf.read(wav_name)
+        speech_16k = librosa.resample(speech, orig_sr=sr, target_sr=16000)
+        # print("SR: {} to {}".format(sr, 16000))
+        # print(speech.shape, speech_16k.shape)
 
-    speech, sr = sf.read(wav_name)
-    speech_16k = librosa.resample(speech, orig_sr=sr, target_sr=16000)
-    # print("SR: {} to {}".format(sr, 16000))
-    # print(speech.shape, speech_16k.shape)
-
-    hubert_hidden = get_hubert_from_16k_speech(speech_16k)
-    hubert_hidden = make_even_first_dim(hubert_hidden).reshape(-1, 2 * 1024)
-    np.save(wav_name.replace('.wav', '_hu.npy'), hubert_hidden.detach().numpy())
-    # print(hubert_hidden.detach().numpy().shape)
+        hubert_hidden = get_hubert_from_16k_speech(speech_16k)
+        hubert_hidden = make_even_first_dim(hubert_hidden).reshape(-1, 2 * 1024)
+        np.save(wav_name.replace('.wav', '_hu.npy'), hubert_hidden.detach().numpy())
+        # print(hubert_hidden.detach().numpy().shape)
 
 
 # screen bash -c "source /root/miniconda3/bin/activate zfacetalker && CUDA_VISIBLE_DEVICES=1 python hubert.py"

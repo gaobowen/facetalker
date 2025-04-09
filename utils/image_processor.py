@@ -11,6 +11,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 
 from torchvision import transforms
 import cv2
@@ -22,13 +26,26 @@ from typing import Union
 from affine_transform import AlignRestore, laplacianSmooth
 import face_alignment
 
+from pathlib import Path
+import glob
+from tqdm import tqdm
+
+
+
+from accelerate import Accelerator
+from accelerate.logging import get_logger
+from accelerate.utils import ProjectConfiguration, set_seed
+from tqdm import tqdm
+from torch.utils.data import Dataset, DataLoader
+
 """
 If you are enlarging the image, you should prefer to use INTER_LINEAR or INTER_CUBIC interpolation. If you are shrinking the image, you should prefer to use INTER_AREA interpolation.
 https://stackoverflow.com/questions/23853632/which-kind-of-interpolation-best-for-resizing-image
 """
 
 
-def load_fixed_mask(resolution: int, mask_image_path="./mask.png") -> torch.Tensor:
+def load_fixed_mask(resolution: int, mask_image_path="") -> torch.Tensor:
+    mask_image_path = f"{os.path.dirname(os.path.abspath(__file__))}/mask.png"
     mask_image = cv2.imread(mask_image_path)
     mask_image = cv2.cvtColor(mask_image, cv2.COLOR_BGR2RGB)
     mask_image = cv2.resize(mask_image, (resolution, resolution), interpolation=cv2.INTER_LANCZOS4) / 255.0
@@ -321,17 +338,60 @@ face_surround_landmarks = [
     148,
 ]
 
+
+
+class VideoDataset(Dataset):
+    def __init__(self, root_dir='/data/gaobowen/split_video_25fps'):
+        super(VideoDataset, self).__init__()
+        self.root_dir = root_dir
+        self.video_paths = glob.glob(os.path.join(root_dir, '**/*.mp4'), recursive=True)
+        self.num = len(self.video_paths)
+        
+    def __len__(self):
+        return self.num
+
+    def __getitem__(self, index):
+        vidpath = self.video_paths[index]
+        
+        return vidpath
+
+# os.environ['CUDA_VISIBLE_DEVICES']="5"
 if __name__ == "__main__":
     from torchvision.utils import save_image
-    
-    resolution = 384
-    
-    image_processor = ImageProcessor(resolution, mask="fix_mask", device="cuda", )
+
+    accelerator = Accelerator()
+    device = accelerator.device
+
+    print(str(device))
+
+    # raise OSError()
+
+    resolution = 320
+    # data_dir = "/data/gaobowen/split_video_25fps"
+    # out_dir = "/data/gaobowen/split_video_25fps_sdvae320"
+    data_dir = "/data/gaobowen/vaildata"
+    out_dir = "/data/gaobowen/vaildata_imgs"
+    dataset = VideoDataset(root_dir=data_dir)
+    total = dataset.num
+    print(data_dir, total)
+
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=1)
+
+    dataloader = accelerator.prepare(dataloader)
+
+    # 只对主进程生效 disable=not accelerator.is_local_main_process
+    progress_bar = tqdm(range(0, len(dataloader)), disable=not accelerator.is_local_main_process)
+    progress_bar.set_description("Steps")
+
+    image_processor = ImageProcessor(resolution, mask="fix_mask", device=str(device), )
     '''
     /data/split_video_25fps/BarackObama_1.mp4
     /data/laihuadata/1742353006021-112652.mp4
     '''
-    def get_face_img(video_path, save_dir):
+    def save_video_face(video_path, save_dir):
+        audio_path = os.path.join(save_dir, 'output.wav')
+        if os.path.exists(audio_path): return
+        
         video = cv2.VideoCapture(video_path)
         mask_image = cv2.imread("./mask.png")
         mask_image = cv2.cvtColor(mask_image, cv2.COLOR_BGR2RGB)
@@ -343,13 +403,16 @@ if __name__ == "__main__":
                 break
 
             # cv2.imwrite("image.jpg", frame)
-            
             # image_processor.fa.get_landmarks(image)
-
             # frame = rearrange(torch.Tensor(frame).type(torch.uint8), "h w c ->  c h w")
             # face, masked_face, _ = image_processor.preprocess_fixed_mask_image(frame, affine_transform=True)
             # 输入 numpy格式h w c，输出 torch格式c h w
-            face, box, affine_matrix = image_processor.affine_transform(frame)
+            try:
+                face, box, affine_matrix = image_processor.affine_transform(frame)
+            except:
+                index += 1
+                continue
+                
             # print(type(face), type(box), type(affine_matrix))
             cv2.imwrite(os.path.join(save_dir, f"{index}.jpg"), face)
             npbox = np.array(box)
@@ -359,6 +422,8 @@ if __name__ == "__main__":
             cv2.imwrite(os.path.join(save_dir, f"{index}_mask.jpg"), face)
             
             def restore():
+                box = np.load(os.path.join(save_dir, f'{index}_box.npy'))
+                affine_matrix = np.load(os.path.join(save_dir, f'{index}_matrix.npy'))
                 x1, y1, x2, y2 = box
                 height = int(y2 - y1)
                 width = int(x2 - x1)
@@ -367,13 +432,50 @@ if __name__ == "__main__":
                 cv2.imwrite(f"../test/out{index}.jpg", out_frame)
 
             index += 1
-        # print(f"\r{index}", end="")
-        # break
+            # print(f"\r{index}", end="")
+            # break
+        
+        os.system(f"ffmpeg -loglevel error -i {video_path} -ac 1 -ar 16000 -vn -y {audio_path}")
 
+    
+    for step, (path) in enumerate(dataloader):
+        filepath = path[0]
+        print(filepath)
+        save_dir = os.path.join(out_dir, Path(filepath).stem)
+        os.makedirs(save_dir, exist_ok=True)
+        print(save_dir)
+        save_video_face(filepath, save_dir)
+        progress_bar.update(1)
+
+
+    # export CUDA_VISIBLE_DEVICES="1,2,3,4,5,6,7" && accelerate launch image_processor.py
+    # export CUDA_VISIBLE_DEVICES="1" && accelerate launch image_processor.py
+
+
+
+
+
+    # mp4_dir = "/data/gaobowen/split_video_25fps"
+    # out_dir = "/data/gaobowen/split_video_25fps_stable"
+    # id_mp4s = glob.glob(f"{mp4_dir}/*.mp4", recursive=True)
+    
+    # print(mp4_dir, out_dir, len(id_mp4s))
+
+    # def run_all_data(id_mp4s):
+    #     for filepath in tqdm(id_mp4s):
+    #         save_dir = os.path.join(out_dir, Path(filepath).stem)
+    #         os.makedirs(save_dir, exist_ok=True)
+    #         save_video_face(filepath, save_dir)
+    #         # break
+
+    # run_all_data(id_mp4s)
+    
     # face = (rearrange(face, "c h w -> h w c").detach().cpu().numpy()).astype(np.uint8)
     # cv2.imwrite("./face.jpg", face)
-
     # masked_face = (rearrange(masked_face, "c h w -> h w c").detach().cpu().numpy()).astype(np.uint8)
     # cv2.imwrite("masked_face.jpg", masked_face)
-    
     # ffmpeg -framerate 25 -i ../test/out%d.jpg -c:v libx264 -y ../outputjpg.mp4
+    
+
+
+    # export CUDA_VISIBLE_DEVICES="7"
