@@ -67,15 +67,18 @@ def inference(step_num, test_dir):
 
     model = UNet2DConditionModel(**unet_config).to(device)
     # model.load_state_dict(torch.load("/data/gaobowen/facetalker/models/musetalk/unet.pth"))
-    model.load_state_dict(load_file(f"/data/gaobowen/facetalker/output_unet/checkpoint-{step_num}/model.safetensors"))
+    model.load_state_dict(load_file(f"/data/gaobowen/facetalker/output_unet2/checkpoint-{step_num}/model.safetensors"))
 
     model = model.to(device).eval()
 
-    # AlexandriaOcasioCortez_1 AustinScott2_1 BarackObama_1 1733208337445-160927 1736236299779-160336
-    dataName = "1736236299779-160336" # 
-    # dataName = "1734338622200-190107"
+    # AlexandriaOcasioCortez_1 AustinScott2_1 BarackObama_1 1733208337445-160927 
+    # 1736236299779-160336
+    # 1734340565511-115823 
+    # 0feishu-20250416-171059 走动中国男性
+    # 1734338622200-190107 方脸中国女性
+    dataName = "1734338622200-190107"
     
-    img_dir = f'/data/gaobowen/split_video_25fps_sdvae320/{dataName}'
+    img_dir = f'/data/gaobowen/split_video_25fps_sdvae320-2/{dataName}'
     
     # img_dir = f'/data/gaobowen/vaildata_imgs/{dataName}'
     
@@ -105,6 +108,7 @@ def inference(step_num, test_dir):
     img_seq_len = len(mode) - 1
     
     def get_mp4_bg():
+        if os.path.exists(f'{test_dir}/{dataName}/0.jpg'): return
         os.makedirs(f"{test_dir}/{dataName}", exist_ok=True)
         vide_capture = cv2.VideoCapture(mp4_path)
         index = 0
@@ -113,6 +117,8 @@ def inference(step_num, test_dir):
             if ret:
                 cv2.imwrite(f'{test_dir}/{dataName}/{index}.jpg', image)
                 index += 1
+
+    get_mp4_bg()
 
     img_idx = 0
     while img_idx < max_img_idx:
@@ -162,12 +168,11 @@ def inference(step_num, test_dir):
         input_vaes = torch.cat(input_vaes, dim=0)
         input_audio_feats = torch.cat(input_audio_feats, dim=0)
         
-        print(input_vaes.shape, input_audio_feats.shape)
+        # print(input_vaes.shape, input_audio_feats.shape)
+        # raise OSError()
         
-        raise OSError()
         timesteps = torch.tensor([0], device=device)
         with torch.no_grad():
-            # B 32*5 10 10
             vaes_pred = model(input_vaes.float(), timestep=timesteps.float(), encoder_hidden_states=input_audio_feats.float()).sample
             vaes_pred = vaes_pred.reshape(-1, 4, vae_hw, vae_hw)
             # print(vaes_pred.shape, vaes_pred[0:0,].shape)
@@ -202,10 +207,10 @@ def inference(step_num, test_dir):
 if __name__ == '__main__':
     test_dir = "./test"
     prefix = "out"
-    inference(70000, test_dir)
+    inference(36000, test_dir)
     def head_mp4():
-        os.system(f"cp -rf {test_dir}/{prefix}2.jpg {test_dir}/{prefix}0.jpg")
-        os.system(f"cp -rf {test_dir}/{prefix}2.jpg {test_dir}/{prefix}1.jpg")
+        # os.system(f"cp -rf {test_dir}/{prefix}2.jpg {test_dir}/{prefix}0.jpg")
+        # os.system(f"cp -rf {test_dir}/{prefix}2.jpg {test_dir}/{prefix}1.jpg")
         os.system(f"ffmpeg -framerate 25 -i {test_dir}/{prefix}%d.jpg -c:v libx264 -pix_fmt yuv420p -y {test_dir}/outputjpg.mp4")
         os.system(f"ffmpeg -i {test_dir}/outputjpg.mp4 -i {test_dir}/output.wav -c:v copy -c:a aac -y {test_dir}/output.mp4")
         os.system(f"rm {test_dir}/*.jpg")
@@ -219,7 +224,7 @@ if __name__ == '__main__':
     
     # ffmpeg -framerate 25 -i out%d.jpg -c:v libx264 -profile:v high -crf 20 -pix_fmt yuv420p output12000.mp4
     # ffmpeg -i output12000.mp4 -i output.wav -c:v copy -c:a aac -y output.mp4
-    
+    # export CUDA_VISIBLE_DEVICES="2"
     # screen bash -c "source /root/miniconda3/bin/activate facetalker && python model.py"
     # tensorboard --logdir=runs --port 9500 --bind_all
     # conda activate facetalker

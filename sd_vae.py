@@ -134,7 +134,8 @@ def preprocess_vae():
     resized_img = 320
     vae = VAE(model_path="./models/sd-vae-ft-mse/", resized_img=resized_img, use_float16=False, device=device)
     
-    root_dir = "/data/gaobowen/vaildata_imgs"
+    # root_dir = "/data/gaobowen/vaildata_imgs"
+    root_dir = "/data/gaobowen/split_video_25fps_sdvae320-2"
     dataset = ImgDataset(root_dir=root_dir, resized_img=resized_img)
     
     total = dataset.num_frames
@@ -165,25 +166,9 @@ if __name__ == "__main__":
     # test_decode()
     
 
-    # export CUDA_VISIBLE_DEVICES="0,1,2,3,4,5" && accelerate launch sd_vae.py
+    # CUDA_VISIBLE_DEVICES="3,4,5,6,7" accelerate launch sd_vae.py
     # conda activate facetalker
 
-    
-    # prefix = "/data/gaobowen/split_video_25fps_sdvae320"
-    # id_imgs = glob.glob(f"{prefix}/*/*.jpg", recursive=True)
-    # # id_imgs = glob.glob(f"{prefix}/1733208337445-160927/*.jpg", recursive=True)
-    # print(len(id_imgs))
-    
-    # for img_path in tqdm(id_imgs):
-    #     vae_path = img_path.replace(".jpg", ".vae")
-    #     # vae存在则跳过
-    #     if os.path.exists(vae_path): continue
-    #     # print(img_path)
-    #     image = Image.open(img_path)
-    #     latents = vae.encode_image(image)
-    #     # test_decode(latents)
-    #     torch.save(latents.detach().cpu(), vae_path)
-    #     # raise OSError("")
     
     
     

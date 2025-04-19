@@ -115,7 +115,7 @@ if __name__ == "__main__":
     from tqdm import tqdm
     # https://huggingface.co/ByteDance/LatentSync-1.5/resolve/main/whisper/tiny.pt
     audio_processor = Audio2Feature(model_path="../models/whisper/tiny.pt")
-    audio_paths = glob.glob(f"/data/gaobowen/split_video_25fps_sdvae320/*/output.wav", recursive=True)
+    audio_paths = glob.glob(f"/data/gaobowen/split_video_25fps_sdvae320-2/*/output.wav", recursive=True)
     # audio_paths = ["/data/gaobowen/vaildata_imgs/1734338622200-190107/output.wav"]
     for audio_path in tqdm(audio_paths):
         whisper_path = audio_path.replace('.wav', '_whisper.npy')
@@ -124,6 +124,8 @@ if __name__ == "__main__":
         if array.shape[0] % 2 > 0:
             array = array[:array.shape[0]-1]
         np.save(whisper_path, array.reshape(-1, 10, 384))
+    
+    # 
         
     
 

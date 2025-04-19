@@ -12,7 +12,7 @@ accelerate launch --main_process_port 30002 --num_processes 1 train_unet_test.py
 --max_grad_norm=1 \
 --lr_warmup_steps=20 \
 --output_dir="output_unet_test" \
---checkpointing_steps=2000 \
+--checkpointing_steps=5000 \
 --resume_from_checkpoint="latest" \
 --lr_scheduler="constant" \
 --finetune_rgb \

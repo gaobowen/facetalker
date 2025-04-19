@@ -156,8 +156,16 @@ class ImageProcessor:
         )
         box = [0, 0, face.shape[1], face.shape[0]]  # x1, y1, x2, y2
         face = cv2.resize(face, (self.resolution, self.resolution), interpolation=cv2.INTER_LANCZOS4)
+        
+        transformed_faces = self.fa.get_landmarks(face)
+        if transformed_faces is None:
+            raise RuntimeError("Face not detected")
+        if not allow_multi_faces and len(transformed_faces) > 1:
+            raise RuntimeError("More than one face detected")
+        transformed_lm68 = transformed_faces[0]
+        
         # face = rearrange(torch.from_numpy(face), "h w c -> c h w")
-        return face, box, affine_matrix
+        return face, box, affine_matrix, transformed_lm68
 
     def preprocess_fixed_mask_image(self, image: torch.Tensor, affine_transform=False):
         if affine_transform:
@@ -355,6 +363,15 @@ class VideoDataset(Dataset):
         
         return vidpath
 
+
+from argparse import ArgumentParser
+parser = ArgumentParser()
+
+parser.add_argument("--data_dir", type=str, default="/data/gaobowen/split_video_25fps")
+parser.add_argument("--out_dir", type=str, default="/data/gaobowen/split_video_25fps_sdvae320-2")
+
+args = parser.parse_args()
+
 # os.environ['CUDA_VISIBLE_DEVICES']="5"
 if __name__ == "__main__":
     from torchvision.utils import save_image
@@ -362,21 +379,20 @@ if __name__ == "__main__":
     accelerator = Accelerator()
     device = accelerator.device
 
-    print(str(device))
+    # print(str(device))
 
     # raise OSError()
 
     resolution = 320
-    # data_dir = "/data/gaobowen/split_video_25fps"
-    # out_dir = "/data/gaobowen/split_video_25fps_sdvae320"
-    data_dir = "/data/gaobowen/vaildata"
-    out_dir = "/data/gaobowen/vaildata_imgs"
+    data_dir = args.data_dir
+    out_dir = args.out_dir
+    # data_dir = "/data/gaobowen/vaildata2"
+    # out_dir = "/data/gaobowen/vaildata_imgs"
     dataset = VideoDataset(root_dir=data_dir)
     total = dataset.num
-    print(data_dir, total)
+    # print(data_dir, total)
 
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=1)
-
+    dataloader = DataLoader(dataset, batch_size=1, num_workers=1)
     dataloader = accelerator.prepare(dataloader)
 
     # 只对主进程生效 disable=not accelerator.is_local_main_process
@@ -406,20 +422,59 @@ if __name__ == "__main__":
             # image_processor.fa.get_landmarks(image)
             # frame = rearrange(torch.Tensor(frame).type(torch.uint8), "h w c ->  c h w")
             # face, masked_face, _ = image_processor.preprocess_fixed_mask_image(frame, affine_transform=True)
-            # 输入 numpy格式h w c，输出 torch格式c h w
+            # 输入 numpy 格式h w c，输出 torch格式c h w
             try:
-                face, box, affine_matrix = image_processor.affine_transform(frame)
+                face, box, affine_matrix, trans_lm68 = image_processor.affine_transform(frame)
             except:
                 index += 1
                 continue
-                
+            
+            # print(trans_lm68)
             # print(type(face), type(box), type(affine_matrix))
             cv2.imwrite(os.path.join(save_dir, f"{index}.jpg"), face)
             npbox = np.array(box)
             np.save(os.path.join(save_dir, f'{index}_box.npy'), npbox)
             np.save(os.path.join(save_dir, f'{index}_matrix.npy'), affine_matrix)
-            face = face * mask_image
+            # 绘制mask
+            trans_lm68 = trans_lm68.astype(np.int32)
+            # index 从1开始
+            trans_lm68 = np.concatenate((np.array([[0, 0]]), trans_lm68), axis=0)
+            
+            # offset_2 = 30 - (trans_lm68[2][1] - trans_lm68[34][1]) if trans_lm68[2][1] - trans_lm68[34][1] <= 30 else 0
+            # offset_16 = 30 - (trans_lm68[16][1] - trans_lm68[34][1]) if trans_lm68[16][1] - trans_lm68[34][1] <= 30 else 0
+            offset_9 = 300 - trans_lm68[9][1] if 300 - trans_lm68[9][1] > 0 else 0
+            offset_2 = (trans_lm68[2][1] - trans_lm68[41][1]) // 2
+            offset_16 = (trans_lm68[16][1] - trans_lm68[48][1]) // 2
+            # print(offset_2, offset_16)
+            # [2.x,2.y][41.x,2.y][41.x,34.y][48.x,34.y][48.x,16.y][16.x,16.y]
+            mask_points = [[trans_lm68[2][0]-3,trans_lm68[2][1]-offset_2],
+                           [trans_lm68[41][0],trans_lm68[2][1]-offset_2],
+                           [trans_lm68[41][0],trans_lm68[34][1]],
+                           [trans_lm68[48][0],trans_lm68[34][1]],
+                           [trans_lm68[48][0],trans_lm68[16][1]-offset_16],
+                           [trans_lm68[16][0]+3,trans_lm68[16][1]-offset_16]]
+            # mask_points = [[trans_lm68[48][0],trans_lm68[34][1]],
+            #                [trans_lm68[48][0],trans_lm68[16][1] - offset_16],
+            #                [trans_lm68[16][0]+5,trans_lm68[16][1] - offset_16]]
+            # print(mask_points, trans_lm68[16])
+            for i in range(13):
+                mask_points.append([trans_lm68[15-i][0],trans_lm68[15-i][1]+offset_9])
+            
+            
+            mask = np.ones((resolution, resolution, 1), dtype=np.uint8)
+            pts = np.array(mask_points, np.int32).reshape((-1, 1, 2))
+            cv2.fillPoly(mask, [pts], 0)
+            
+            # for idx in range(68):
+            #     x = int(trans_lm68[idx][0])
+            #     y = int(trans_lm68[idx][1])
+            #     # print((x,y))
+            #     cv2.circle(face, (int(x), y), 2, (0, 255, 0), -1)  # 绘制关键点
+            #     cv2.putText(face, str(idx + 1), (x + 5, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.3, (255, 0, 0), 1)
+            
+            face = face * mask
             cv2.imwrite(os.path.join(save_dir, f"{index}_mask.jpg"), face)
+            # raise OSError()
             
             def restore():
                 box = np.load(os.path.join(save_dir, f'{index}_box.npy'))
@@ -440,42 +495,14 @@ if __name__ == "__main__":
     
     for step, (path) in enumerate(dataloader):
         filepath = path[0]
-        print(filepath)
+        print("filepath", filepath)
         save_dir = os.path.join(out_dir, Path(filepath).stem)
         os.makedirs(save_dir, exist_ok=True)
-        print(save_dir)
+        print("save_dir", save_dir)
         save_video_face(filepath, save_dir)
         progress_bar.update(1)
 
 
-    # export CUDA_VISIBLE_DEVICES="1,2,3,4,5,6,7" && accelerate launch image_processor.py
-    # export CUDA_VISIBLE_DEVICES="1" && accelerate launch image_processor.py
+    # export CUDA_VISIBLE_DEVICES="3,4,5,6,7" && accelerate launch image_processor.py
+    # CUDA_VISIBLE_DEVICES="4,5,6,7" accelerate launch image_processor.py
 
-
-
-
-
-    # mp4_dir = "/data/gaobowen/split_video_25fps"
-    # out_dir = "/data/gaobowen/split_video_25fps_stable"
-    # id_mp4s = glob.glob(f"{mp4_dir}/*.mp4", recursive=True)
-    
-    # print(mp4_dir, out_dir, len(id_mp4s))
-
-    # def run_all_data(id_mp4s):
-    #     for filepath in tqdm(id_mp4s):
-    #         save_dir = os.path.join(out_dir, Path(filepath).stem)
-    #         os.makedirs(save_dir, exist_ok=True)
-    #         save_video_face(filepath, save_dir)
-    #         # break
-
-    # run_all_data(id_mp4s)
-    
-    # face = (rearrange(face, "c h w -> h w c").detach().cpu().numpy()).astype(np.uint8)
-    # cv2.imwrite("./face.jpg", face)
-    # masked_face = (rearrange(masked_face, "c h w -> h w c").detach().cpu().numpy()).astype(np.uint8)
-    # cv2.imwrite("masked_face.jpg", masked_face)
-    # ffmpeg -framerate 25 -i ../test/out%d.jpg -c:v libx264 -y ../outputjpg.mp4
-    
-
-
-    # export CUDA_VISIBLE_DEVICES="7"
